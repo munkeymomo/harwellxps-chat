@@ -34,7 +34,7 @@
     #user-input { flex: 1; padding: 10px 14px; border: 1.5px solid #d1d5db; border-radius: 10px; font-size: 14px; outline: none; resize: none; font-family: inherit; line-height: 1.5; max-height: 120px; overflow-y: auto; transition: border-color 0.2s; }
     #user-input:focus { border-color: #1a3a5c; }
     #user-input::placeholder { color: #9ca3af; }
-    #send-btn { width: 40px; height: 40px; background: #1a3a5c; color: white; border: none; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    #send-btn { width: 40px; height: 40px; background: #1a3a5c; color: white; border: none; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.2s; }
     #send-btn:hover:not(:disabled) { background: #2a5a8c; }
     #send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
     #send-btn svg { width: 18px; height: 18px; }
@@ -64,11 +64,96 @@
   </button>
 </div>
 <script>
-  const WEBHOOK_URL = 'https://hook.eu2.make.com/w97vru842f4t5e1cf468gmm8tcaafblz';
+  // ─── CONFIG ───────────────────────────────────────────────────────────────
+  const CLAUDE_API_KEY  = 'YOUR_ANTHROPIC_API_KEY_HERE';
+  const MAKE_WEBHOOK    = 'https://hook.eu2.make.com/w97vru842f4t5e1cf468gmm8tcaafblz';
+  const CLAUDE_MODEL    = 'claude-sonnet-4-20250514';
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const SYSTEM_PROMPT = `You are the HarwellXPS facility application assistant. You help users apply for instrument time at the Harwell XPS facility, which provides surface analysis using X-ray photoelectron spectroscopy (XPS) and complementary techniques. Your job is to guide users conversationally, gather required information, suggest appropriate techniques, estimate analysis time and cost, and at the end return a structured JSON record ready for database submission.
+
+FACILITY: Default centre is Harwell Main Centre.
+
+Available techniques: Standard XPS, Air-Sensitive Sample Handling, Angle Resolved XPS, CryoXPS, High Energy X-rays (Ag La), Ion Etching (Gas Cluster), Ion Etching (Monotomic), Ion Scattering Spectroscopy, Raman Spectroscopy, Reflectance Electron Energy Loss Spectroscopy, Sample Heating, SEM-XPS, Ultraviolet Photoelectron Spectroscopy, XPS 2D Mapping, XANES, XAFS, XES.
+
+OFFLINE - do NOT suggest: Catalysis Cell, Electrochemical Biasing.
+Do NOT suggest Raman unless user specifically asks.
+
+CONVERSATION FLOW:
+Step 1 - Greet user by name from USER CONTEXT. Be warm.
+Step 2 - Ask what they want to achieve scientifically. Suggest appropriate XPS techniques. The application field (e.g. furfural production, battery research) is the research CONTEXT - not a sample to analyse. Focus on what physical samples they have in their lab.
+Step 3 - Ask timeline. If SME or startup mention S2CI scheme for free or discounted time.
+Step 4 - Ask instrument preference: Kratos Supra, Thermo Nexsa, or facility decides.
+Step 5 - Ask Attend, Post Samples, or Remote Attend.
+Step 6 - For each sample collect: name, material, form (powder/film/pellet/liquid etc), hazards, number of analysis spots, scientific question, techniques. For each high resolution region ask element and approximate atomic percent. CRITICAL: ARXPS is NOT useful on powder samples because particle geometry dominates the angular signal - explain this clearly if requested and suggest alternatives. Monatomic ion etching damages organic samples - recommend Gas Cluster Ion Beam (GCIB) instead.
+Step 7 - Ask EPSRC theme.
+Step 8 - Ask about additional project investigators (supervisor, collaborators).
+Step 9 - Calculate and present cost estimate using hourly rate from USER CONTEXT. Show time breakdown.
+Step 10 - Suggest a concise project title.
+Step 11 - Ask for abstract, or offer to draft one.
+Step 12 - Show full summary and ask to confirm or change anything.
+Step 13 - On confirmation return JSON only with no other text.
+
+S2CI SCHEME: If user is from a startup or SME proactively say they may qualify for the S2CI scheme offering free or discounted instrument time. If yes collect: company age, number of employees, funding stage, commercial application description. Set s2ci to true in JSON.
+
+TIME ESTIMATION MODEL:
+Fixed overhead: 30 mins per project.
+Survey scan: 5 mins per sample.
+UPS: 15 mins. ISS: 20 mins. REELS: 10 mins. Raman: 20 mins. XANES: 30 mins. XES: 30 mins. XAFS: 60 mins.
+High resolution regions base time by atomic percent: 20% or more = 5 mins, 10-20% = 10 mins, 1-10% = 15 mins, under 1% = 30 mins.
+Difficulty multiplier: most elements x1, first row transition metals (Ti, V, Cr, Mn, Fe, Co, Ni, Cu, Zn) x3, lanthanides x2.
+High Energy Ag La = standard XPS time x3.
+CryoXPS = standard XPS + 60 min setup once per project.
+ARXPS = standard XPS time x number of angles.
+Depth profiling = HR region time x number of segments.
+XPS 2D Mapping = 30 mins x number of elements x images per element.
+Sample Heating = 5 mins x number of temperature intervals.
+SEM-XPS = £200 fixed cost per sample, outside hourly model.
+Ion Etching = no cost, no time.
+Total minutes divided by 60, rounded up to nearest integer = analysis time in hours.
+
+COST: Use the hourly rate from USER CONTEXT. Apply VAT at 20%. Add SEM-XPS fixed costs separately. Present as estimate not a quote.
+
+STAFF MEMBER: Ask if user has been in contact with a specific member of the team. If yes ask their name.
+
+JSON OUTPUT SCHEMA - when complete and confirmed, return ONLY this JSON:
+{
+  "application": {
+    "project_title": "string",
+    "abstract": "string",
+    "number_of_samples": 0,
+    "sample_information": "string (samples separated by ---)",
+    "techniques_required": ["array of exact technique strings"],
+    "epsrc_theme": "string",
+    "preferred_instrument": "string or null",
+    "attend_or_post": "Attend or Post Samples or Remote Attend",
+    "s2ci": false,
+    "analysis_time_hours": 0,
+    "cost_ex_vat": 0,
+    "cost_inc_vat": 0,
+    "staff_member": "string or null",
+    "project_investigators_emails": [],
+    "ftu_rpt": "First Time User or Repeat User"
+  },
+  "user": {
+    "email": "string",
+    "airtable_record_id": "string"
+  },
+  "s2ci_details": {
+    "company_age": null,
+    "employees": null,
+    "funding_stage": null,
+    "commercial_application": null
+  }
+}`;
 
   const urlParams = new URLSearchParams(window.location.search);
   const userEmail = urlParams.get('email') || '';
   const conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+  // Conversation history for Claude
+  let messages = [];
+  let userContext = null;
 
   const chatContainer = document.getElementById('chat-container');
   const userInput     = document.getElementById('user-input');
@@ -119,6 +204,12 @@
     statusText.textContent = on ? 'Thinking\u2026' : 'Online';
   }
 
+  function showError(msg) {
+    errorBanner.textContent = msg;
+    errorBanner.style.display = 'block';
+    setTimeout(() => { errorBanner.style.display = 'none'; }, 6000);
+  }
+
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
@@ -128,47 +219,91 @@
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   }
 
-  async function callWebhook(message) {
+  async function fetchUserContext() {
+    // Fetch user data from Make.com webhook which looks up Airtable
+    try {
+      const r = await fetch(MAKE_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_email: userEmail, message: '__GET_CONTEXT__', conversation_id: conversationId })
+      });
+      const data = await r.json();
+      if (data.user_name) return data;
+    } catch {}
+    return null;
+  }
+
+  async function callClaude(userMessage) {
+    // Add user message to history
+    messages.push({ role: 'user', content: userMessage });
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': CLAUDE_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 1500,
+        system: SYSTEM_PROMPT,
+        messages: messages
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error?.message || 'Claude API error');
+    }
+
+    const data = await response.json();
+    const assistantText = data.content[0].text;
+
+    // Add assistant response to history
+    messages.push({ role: 'assistant', content: assistantText });
+
+    // Check if this is the final JSON submission
+    if (assistantText.trim().startsWith('{') && assistantText.includes('"application"')) {
+      submitToMake(assistantText);
+    }
+
+    return assistantText;
+  }
+
+  async function submitToMake(jsonText) {
+    // Send final application JSON to Make.com for Airtable record creation
+    try {
+      const parsed = JSON.parse(jsonText);
+      await fetch(MAKE_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_email: userEmail,
+          message: '__SUBMIT__',
+          conversation_id: conversationId,
+          application_data: parsed
+        })
+      });
+    } catch (err) {
+      console.error('Submission error:', err);
+    }
+  }
+
+  async function chat(userMessage) {
     setLoading(true);
     showTyping();
     try {
-      const r = await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_email: userEmail, message: message, conversation_id: conversationId })
-      });
-
-      // Try to parse as JSON first
-      const text = await r.text();
-      let response = null;
-
-      // Handle plain "Accepted" response (synchronous not supported)
-      if (text === 'Accepted') {
-        hideTyping();
-        addMessage('Sorry — the server acknowledged the request but did not return a response. Please check Make.com setup.', 'assistant');
-        return;
-      }
-
-      try {
-        const data = JSON.parse(text);
-        response = data.response || data.message || data.text || Object.values(data)[0];
-      } catch {
-        response = text;
-      }
-
+      const response = await callClaude(userMessage);
       hideTyping();
-      if (response) {
-        addMessage(String(response), 'assistant');
-      } else {
-        addMessage('Received an empty response. Please try again.', 'assistant');
-      }
-
+      addMessage(response, 'assistant');
     } catch (err) {
       hideTyping();
-      errorBanner.textContent = 'Connection error. Please try again.';
-      errorBanner.style.display = 'block';
-      setTimeout(() => { errorBanner.style.display = 'none'; }, 5000);
+      showError('Sorry, something went wrong. Please try again.');
       console.error(err);
+      // Remove the failed message from history
+      if (messages[messages.length - 1]?.role === 'user') messages.pop();
     } finally {
       setLoading(false);
       userInput.focus();
@@ -182,10 +317,11 @@
     userInput.style.height = 'auto';
     errorBanner.style.display = 'none';
     addMessage(text, 'user');
-    await callWebhook(text);
+    await chat(text);
   }
 
-  window.addEventListener('load', () => {
+  // ─── INIT ─────────────────────────────────────────────────────────────────
+  window.addEventListener('load', async () => {
     if (!userEmail) {
       addMessage('Hi! Please log in through the HarwellXPS portal to start an application.', 'assistant');
       sendBtn.disabled = true;
@@ -193,7 +329,27 @@
       userInput.placeholder = 'Please log in to continue';
       return;
     }
-    setTimeout(() => callWebhook('__INIT__'), 500);
+
+    setLoading(true);
+    showTyping();
+
+    // Seed the conversation with user context as first message
+    const contextMessage = `USER CONTEXT:
+Name: ${userEmail}
+Email: ${userEmail}
+Please greet me and ask what I want to achieve scientifically.`;
+
+    try {
+      const response = await callClaude(contextMessage);
+      hideTyping();
+      addMessage(response, 'assistant');
+    } catch (err) {
+      hideTyping();
+      addMessage('Hi! I\'m the HarwellXPS Application Assistant. What would you like to achieve scientifically today?', 'assistant');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   });
 </script>
 </body>
