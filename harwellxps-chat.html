@@ -16,7 +16,7 @@
     #header .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #4CAF50; }
     #header .status-dot.loading { background: #FFC107; animation: pulse 1s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    #chat-container { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+    #chat-container { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
     .message-wrapper { display: flex; flex-direction: column; gap: 4px; }
     .message-wrapper.user { align-items: flex-end; }
     .message-wrapper.assistant { align-items: flex-start; }
@@ -34,7 +34,7 @@
     #user-input { flex: 1; padding: 10px 14px; border: 1.5px solid #d1d5db; border-radius: 10px; font-size: 14px; outline: none; resize: none; font-family: inherit; line-height: 1.5; max-height: 120px; overflow-y: auto; transition: border-color 0.2s; }
     #user-input:focus { border-color: #1a3a5c; }
     #user-input::placeholder { color: #9ca3af; }
-    #send-btn { width: 40px; height: 40px; background: #1a3a5c; color: white; border: none; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s; flex-shrink: 0; }
+    #send-btn { width: 40px; height: 40px; background: #1a3a5c; color: white; border: none; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     #send-btn:hover:not(:disabled) { background: #2a5a8c; }
     #send-btn:disabled { background: #d1d5db; cursor: not-allowed; }
     #send-btn svg { width: 18px; height: 18px; }
@@ -64,10 +64,7 @@
   </button>
 </div>
 <script>
-  const SEND_WEBHOOK  = 'https://hook.eu2.make.com/w97vru842f4t5e1cf468gmm8tcaafblz';
-  const POLL_WEBHOOK  = 'https://hook.eu2.make.com/fc23r9g1exg7eq6sgfpvvvi86ybmcbys';
-  const POLL_INTERVAL = 2000;
-  const POLL_TIMEOUT  = 60000;
+  const WEBHOOK_URL = 'https://hook.eu2.make.com/w97vru842f4t5e1cf468gmm8tcaafblz';
 
   const urlParams = new URLSearchParams(window.location.search);
   const userEmail = urlParams.get('email') || '';
@@ -122,12 +119,6 @@
     statusText.textContent = on ? 'Thinking\u2026' : 'Online';
   }
 
-  function showError(msg) {
-    errorBanner.textContent = msg;
-    errorBanner.style.display = 'block';
-    setTimeout(() => { errorBanner.style.display = 'none'; }, 5000);
-  }
-
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
@@ -137,41 +128,47 @@
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   }
 
-  function pollForResponse() {
-    return new Promise((resolve, reject) => {
-      const deadline = Date.now() + POLL_TIMEOUT;
-      async function attempt() {
-        if (Date.now() > deadline) { reject(new Error('Timeout')); return; }
-        try {
-          const r = await fetch(POLL_WEBHOOK, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ conversation_id: conversationId })
-          });
-          const data = await r.json();
-          if (data.done && data.response) { resolve(data.response); }
-          else { setTimeout(attempt, POLL_INTERVAL); }
-        } catch { setTimeout(attempt, POLL_INTERVAL); }
-      }
-      attempt();
-    });
-  }
-
-  async function callAndPoll(message) {
+  async function callWebhook(message) {
     setLoading(true);
     showTyping();
     try {
-      fetch(SEND_WEBHOOK, {
+      const r = await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_email: userEmail, message: message, conversation_id: conversationId })
       });
-      const response = await pollForResponse();
+
+      // Try to parse as JSON first
+      const text = await r.text();
+      let response = null;
+
+      // Handle plain "Accepted" response (synchronous not supported)
+      if (text === 'Accepted') {
+        hideTyping();
+        addMessage('Sorry — the server acknowledged the request but did not return a response. Please check Make.com setup.', 'assistant');
+        return;
+      }
+
+      try {
+        const data = JSON.parse(text);
+        response = data.response || data.message || data.text || Object.values(data)[0];
+      } catch {
+        response = text;
+      }
+
       hideTyping();
-      addMessage(response, 'assistant');
+      if (response) {
+        addMessage(String(response), 'assistant');
+      } else {
+        addMessage('Received an empty response. Please try again.', 'assistant');
+      }
+
     } catch (err) {
       hideTyping();
-      showError('Sorry, something went wrong. Please try again.');
+      errorBanner.textContent = 'Connection error. Please try again.';
+      errorBanner.style.display = 'block';
+      setTimeout(() => { errorBanner.style.display = 'none'; }, 5000);
+      console.error(err);
     } finally {
       setLoading(false);
       userInput.focus();
@@ -185,18 +182,18 @@
     userInput.style.height = 'auto';
     errorBanner.style.display = 'none';
     addMessage(text, 'user');
-    await callAndPoll(text);
+    await callWebhook(text);
   }
 
   window.addEventListener('load', () => {
     if (!userEmail) {
-      addMessage("Hi! Please log in through the HarwellXPS portal to start an application.", 'assistant');
+      addMessage('Hi! Please log in through the HarwellXPS portal to start an application.', 'assistant');
       sendBtn.disabled = true;
       userInput.disabled = true;
       userInput.placeholder = 'Please log in to continue';
       return;
     }
-    setTimeout(() => callAndPoll('__INIT__'), 500);
+    setTimeout(() => callWebhook('__INIT__'), 500);
   });
 </script>
 </body>
